@@ -86,6 +86,17 @@ video{width:100%;height:100%;object-fit:contain}
 .psearch input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:2px;padding:3px 7px;color:var(--text);outline:none}
 .psearch input:focus{border-color:var(--blue)}
 .psearch input::placeholder{color:var(--text2)}
+
+.pactions{padding:5px 8px;border-bottom:1px solid var(--border);display:flex;gap:6px;flex-shrink:0;background:var(--bg2)}
+.pactions button{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px;padding:4px 6px;cursor:pointer;white-space:nowrap}
+.pactions button:hover:not(:disabled){background:var(--hover);border-color:var(--blue)}
+.pactions button:disabled{opacity:.45;cursor:not-allowed}
+.crow.selected{outline:1px solid var(--orange);outline-offset:-1px;background:rgba(255,136,0,.10)}
+.crow.active.selected{background:linear-gradient(90deg, var(--active), rgba(255,136,0,.18))}
+.crow .csel{width:14px;height:14px;accent-color:var(--orange);flex-shrink:0;cursor:pointer}
+.row-del{width:22px;height:22px;border:1px solid transparent;border-radius:3px;background:transparent;color:var(--text2);font-size:18px;line-height:18px;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.row-del:hover{background:rgba(200,0,0,.25);border-color:#8a2d2d;color:#fff}
+.no-logo{width:30px;height:30px;display:inline-block;flex-shrink:0}
 .plist{flex:1;overflow-y:auto}
 .crow{display:flex;align-items:center;padding:6px 10px;border-bottom:1px solid var(--border);cursor:pointer;gap:8px;min-height:42px}
 .crow:hover{background:var(--hover)}

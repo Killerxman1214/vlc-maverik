@@ -22,6 +22,7 @@ let subCues = [], subLoop = null;
 let objUrl = null;
 let vizAF = null, audioCtx = null, srcNode = null, analyser = null;
 let currentMedia = { name:'—', url:'', type:'', source:'', group:'', ext:'', local:false, file:null, startedAt:null };
+let selectedChannels = new Set();
 
 // ── FORMAT SETS ──
 const AUDIO = new Set(['mp3','aac','flac','wav','ogg','opus','wma','m4a','aiff','aif','mka','ac3','dts','amr','mid','midi','ra','ape']);
@@ -356,9 +357,147 @@ document.getElementById('subInput').onchange = async e => {
 
 
 function updatePlaylistFooter(label = 'élément'){
-  document.getElementById('pfooter').innerText =
-    channels.length + ' ' + label + (channels.length > 1 ? 's' : '');
-  stL.innerText = `Liste — ${channels.length} élément(s)`;
+  const selectedCount = getSelectedCount();
+  const totalText = channels.length + ' ' + label + (channels.length > 1 ? 's' : '');
+  document.getElementById('pfooter').innerText = selectedCount > 0
+    ? `${totalText} · ${selectedCount} sélectionné(s)`
+    : totalText;
+  stL.innerText = selectedCount > 0
+    ? `Liste — ${channels.length} élément(s), ${selectedCount} sélectionné(s)`
+    : `Liste — ${channels.length} élément(s)`;
+  updatePlaylistActionButtons();
+}
+
+function getSelectedCount(){
+  let count = 0;
+  selectedChannels.forEach(ch => {
+    if (channels.includes(ch)) count++;
+  });
+  return count;
+}
+
+function updatePlaylistActionButtons(){
+  const delBtn = document.getElementById('deleteSelectedBtn');
+  const clearBtn = document.getElementById('clearPlaylistBtn');
+  const hasSelected = getSelectedCount() > 0;
+  if (delBtn) delBtn.disabled = !hasSelected;
+  if (clearBtn) clearBtn.disabled = channels.length === 0;
+}
+
+function currentSearchText(){
+  const srch = document.getElementById('srch');
+  return srch ? srch.value.trim().toLowerCase() : '';
+}
+
+function refreshFiltered(){
+  const q = currentSearchText();
+  filtered = q ? channels.filter(c => c.name.toLowerCase().includes(q)) : [...channels];
+}
+
+function isObjectUrl(url){
+  return typeof url === 'string' && url.startsWith('blob:');
+}
+
+function revokeChannelUrl(ch){
+  if (ch && ch.local && isObjectUrl(ch.url)){
+    try{ URL.revokeObjectURL(ch.url); }catch(e){}
+  }
+}
+
+function clearPlaylistSelection(){
+  selectedChannels.clear();
+  renderCh();
+  updatePlaylistFooter();
+  osd('☑ Sélection effacée');
+}
+
+function togglePlaylistSelection(idx){
+  const ch = channels[idx];
+  if (!ch) return;
+  if (selectedChannels.has(ch)) selectedChannels.delete(ch);
+  else selectedChannels.add(ch);
+  renderCh();
+  updatePlaylistFooter();
+}
+
+function selectOnlyPlaylistItem(idx){
+  const ch = channels[idx];
+  if (!ch) return;
+  selectedChannels.clear();
+  selectedChannels.add(ch);
+  renderCh();
+  updatePlaylistFooter();
+}
+
+function removeSelectedChannels(){
+  const toRemove = channels.filter(ch => selectedChannels.has(ch));
+  if (!toRemove.length){
+    osd('❌ Aucun élément sélectionné');
+    return;
+  }
+
+  const current = chIdx >= 0 ? channels[chIdx] : null;
+  const removingCurrent = current && toRemove.includes(current);
+
+  if (removingCurrent){
+    stopVideo();
+  }
+
+  toRemove.forEach(revokeChannelUrl);
+  channels = channels.filter(ch => !selectedChannels.has(ch));
+  selectedChannels.clear();
+
+  if (removingCurrent){
+    chIdx = -1;
+  } else if (current){
+    chIdx = channels.indexOf(current);
+  } else {
+    chIdx = -1;
+  }
+
+  refreshFiltered();
+  renderCh();
+  updatePlaylistFooter();
+  osd(`🗑 ${toRemove.length} élément(s) supprimé(s)`);
+}
+
+function removeChannelAt(idx){
+  const ch = channels[idx];
+  if (!ch) return;
+
+  if (idx === chIdx){
+    stopVideo();
+    chIdx = -1;
+  } else if (idx < chIdx){
+    chIdx--;
+  }
+
+  selectedChannels.delete(ch);
+  revokeChannelUrl(ch);
+  channels.splice(idx, 1);
+
+  refreshFiltered();
+  renderCh();
+  updatePlaylistFooter();
+  osd('🗑 Élément supprimé');
+}
+
+function clearPlaylist(){
+  if (!channels.length){
+    osd('❌ Liste déjà vide');
+    return;
+  }
+
+  stopVideo();
+  channels.forEach(revokeChannelUrl);
+  channels = [];
+  filtered = [];
+  selectedChannels.clear();
+  chIdx = -1;
+
+  renderCh();
+  updatePlaylistFooter();
+  osd('🧹 Liste vidée');
 }
 
 function addMediaFilesToPlaylist(files){
@@ -914,7 +1053,7 @@ function renderCh(){
   filtered.forEach(ch => {
     const idx = channels.indexOf(ch);
     const row = document.createElement('div');
-    row.className = 'crow' + (idx === chIdx ? ' active' : '');
+    row.className = 'crow' + (idx === chIdx ? ' active' : '') + (selectedChannels.has(ch) ? ' selected' : '');
     row.dataset.i = idx;
 
     let logoHtml = '';
@@ -930,20 +1069,40 @@ function renderCh(){
     }
 
     row.innerHTML = `
+      <input class="csel" type="checkbox" title="Sélectionner" ${selectedChannels.has(ch) ? 'checked' : ''}>
       <span class="cn">${idx + 1}</span>
       ${logoHtml}
-      <span class="ct" title="${ch.name}">${ch.name}</span>
+      <span class="ct" title="${escHtml(ch.name)}">${escHtml(ch.name)}</span>
+      <button class="row-del" title="Supprimer cet élément">×</button>
     `;
 
-    row.onclick = () => playCh(idx);
+    row.querySelector('.csel').onclick = e => {
+      e.stopPropagation();
+      togglePlaylistSelection(idx);
+    };
+
+    row.querySelector('.row-del').onclick = e => {
+      e.stopPropagation();
+      removeChannelAt(idx);
+    };
+
+    row.onclick = e => {
+      if (e.ctrlKey || e.metaKey){
+        togglePlaylistSelection(idx);
+      } else {
+        playCh(idx);
+      }
+    };
+
     plist.appendChild(row);
   });
 }
 
 function filterCh(q){
   q = q.toLowerCase();
-  filtered = channels.filter(c => c.name.toLowerCase().includes(q));
+  filtered = q ? channels.filter(c => c.name.toLowerCase().includes(q)) : [...channels];
   renderCh();
+  updatePlaylistFooter();
 }
 
 function savePlaylist(){
@@ -1256,6 +1415,16 @@ document.addEventListener('keydown', e => {
     case '=':
     case '+':
       setRate(1);
+      break;
+    case 'Delete':
+      e.preventDefault();
+      removeSelectedChannels();
+      break;
+    case 'Escape':
+      if (getSelectedCount() > 0){
+        e.preventDefault();
+        clearPlaylistSelection();
+      }
       break;
   }
 });
