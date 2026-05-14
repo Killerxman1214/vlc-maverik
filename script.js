@@ -1201,7 +1201,26 @@ function updVol(v){
 }
 
 // ── PANEL / FULL ──
-function tPanel(){ document.getElementById('panel').classList.toggle('hide'); }
+function tPanel(){
+  if (document.body.classList.contains('playlist-full')){
+    document.body.classList.remove('playlist-full');
+    osd('🎬 Lecteur vidéo');
+    return;
+  }
+  document.getElementById('panel').classList.toggle('hide');
+}
+function togglePlaylistView(){
+  const panel = document.getElementById('panel');
+  document.body.classList.toggle('playlist-full');
+
+  if (document.body.classList.contains('playlist-full')){
+    panel.classList.remove('hide');
+    renderCh();
+    osd('📋 Playlist grand écran');
+  } else {
+    osd('🎬 Lecteur vidéo');
+  }
+}
 function tFull(){
   const el = document.getElementById('vwrap');
   if (!document.fullscreenElement) (el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen).call(el);
@@ -1393,6 +1412,10 @@ document.addEventListener('keydown', e => {
     case 'l':
     case 'L':
       tPanel();
+      break;
+    case 'v':
+    case 'V':
+      togglePlaylistView();
       break;
     case 'ArrowUp':
       e.preventDefault();

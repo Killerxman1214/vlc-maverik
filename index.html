@@ -8,7 +8,7 @@
   <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/flv.js@latest/dist/flv.min.js"></script>
 
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
 
@@ -85,6 +85,7 @@
     <div class="ml" onclick="tmenu('mVu')">Vue</div>
     <div class="dd">
       <div class="di" onclick="cm();tPanel()">Liste de lecture <span class="sc">L</span></div>
+      <div class="di" onclick="cm();togglePlaylistView()">Playlist en grand écran <span class="sc">V</span></div>
       <div class="di" onclick="cm();tToolbar()">Barre d'outils</div>
     </div>
   </div>
@@ -118,6 +119,9 @@
   <div class="tsep"></div>
   <div class="tb" title="Playlist" onclick="tPanel()">
     <svg viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
+  </div>
+  <div class="tb" title="Playlist grand écran" onclick="togglePlaylistView()">
+    <svg viewBox="0 0 24 24"><path d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h18v2H3v-2z"/></svg>
   </div>
 </div>
 
@@ -248,6 +252,6 @@
   </div>
 </div>
 
-<script src="script.js"></script>
+<script src="script.js?v=6"></script>
 </body>
 </html>
