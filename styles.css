@@ -214,3 +214,46 @@ body.playlist-full .row-del{width:28px;height:28px;font-size:22px}
 body.playlist-full .pfooter{font-size:13px;padding:10px 18px}
 body.playlist-full .ctrl{display:none}
 body.playlist-full .sbar{display:none}
+
+/* ── VLC-LIKE OPTIONS MODALS ── */
+.option-modal{
+  width:min(720px, 94vw);
+  max-height:86vh;
+  display:flex;
+  flex-direction:column;
+}
+.option-modal .mbody{
+  overflow-y:auto;
+  max-height:65vh;
+  padding:10px;
+}
+.optsection{
+  color:var(--orange);
+  font-weight:bold;
+  padding:9px 8px 5px;
+  border-bottom:1px solid var(--border);
+  margin-top:4px;
+}
+.optrow{
+  width:100%;
+  min-height:36px;
+  display:flex;
+  align-items:center;
+  gap:9px;
+  background:transparent;
+  color:var(--text);
+  border:0;
+  border-bottom:1px solid rgba(255,255,255,.05);
+  text-align:left;
+  padding:7px 8px;
+  cursor:pointer;
+  font:inherit;
+}
+.optrow:hover{background:var(--hover)}
+.optrow.active{background:rgba(58,143,212,.2);color:#fff}
+.optcheck{width:18px;color:var(--orange);font-weight:bold;text-align:center;flex-shrink:0}
+.optlabel{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.optdetail{color:var(--text2);font-size:11px;margin-left:auto;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.optrow.active .optdetail{color:#b9d9ff}
+.optempty{padding:18px 10px;color:var(--text2);line-height:1.8;text-align:center}
+.optfooterline{display:flex;gap:8px;justify-content:flex-end;padding:12px 8px 4px;border-top:1px solid var(--border);margin-top:8px}

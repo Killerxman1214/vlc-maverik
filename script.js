@@ -23,6 +23,9 @@ let objUrl = null;
 let vizAF = null, audioCtx = null, srcNode = null, analyser = null;
 let currentMedia = { name:'—', url:'', type:'', source:'', group:'', ext:'', local:false, file:null, startedAt:null };
 let selectedChannels = new Set();
+let qualityMode = 'best'; // best | auto | manual
+let loadedSubName = '';
+let customSubEnabled = true;
 
 // ── FORMAT SETS ──
 const AUDIO = new Set(['mp3','aac','flac','wav','ogg','opus','wma','m4a','aiff','aif','mka','ac3','dts','amr','mid','midi','ra','ape']);
@@ -165,7 +168,7 @@ function mediaRows(){
     ['Volume', `${Math.round((vid.volume || 0) * 100)}%${vid.muted ? ' (muet)' : ''}`],
     ['Vitesse', `×${vid.playbackRate || 1}`],
     ['État lecteur', vid.paused ? 'Pause / arrêté' : 'Lecture'],
-    ['Qualité', BEST_QUALITY_MODE ? 'Meilleure qualité disponible' : 'Automatique']
+    ['Qualité', qualityMode === 'best' ? 'Meilleure qualité disponible' : (qualityMode === 'auto' ? 'Automatique adaptatif' : 'Manuelle')]
   ];
   if (adaptive){
     rows.push(['Protocole adaptatif', adaptive.protocole]);
@@ -231,6 +234,343 @@ function copyMediaInfo(){
     ta.remove();
     osd('📋 Infos copiées');
   }
+}
+
+
+// ── VLC-LIKE TRACKS / SUBTITLES / QUALITY ──
+function ensureOptionModal(id, title){
+  let modal = document.getElementById(id);
+  if (modal) return modal;
+
+  modal = document.createElement('div');
+  modal.className = 'moverlay';
+  modal.id = id;
+  modal.innerHTML = `
+    <div class="modal option-modal">
+      <div class="mtitle">${title} <span class="x" onclick="closeOptionModal('${id}')">✖</span></div>
+      <div class="mbody"><div class="optionBody"></div></div>
+      <div class="mfoot">
+        <button class="mbtn p" onclick="closeOptionModal('${id}')">Fermer</button>
+      </div>
+    </div>`;
+  modal.addEventListener('click', e => { if (e.target.id === id) closeOptionModal(id); });
+  document.body.appendChild(modal);
+  return modal;
+}
+
+function closeOptionModal(id){
+  const modal = document.getElementById(id);
+  if (modal) modal.classList.remove('on');
+}
+
+function optionButton(label, active, onclick, detail = ''){
+  return `<button class="optrow${active ? ' active' : ''}" onclick="${onclick}">
+    <span class="optcheck">${active ? '✓' : ''}</span>
+    <span class="optlabel">${escHtml(label)}</span>
+    ${detail ? `<span class="optdetail">${escHtml(detail)}</span>` : ''}
+  </button>`;
+}
+
+function getNativeAudioTracks(){
+  try{
+    if (vid.audioTracks && vid.audioTracks.length) return Array.from(vid.audioTracks);
+  } catch(e){}
+  return [];
+}
+
+function getNativeTextTracks(){
+  try{
+    if (vid.textTracks && vid.textTracks.length) return Array.from(vid.textTracks);
+  } catch(e){}
+  return [];
+}
+
+function showAudioTrackManager(){
+  const modal = ensureOptionModal('audioTrackModal', 'Piste audio');
+  const body = modal.querySelector('.optionBody');
+  let html = '';
+  let found = false;
+
+  if (hlsI && hlsI.audioTracks && hlsI.audioTracks.length){
+    found = true;
+    html += '<div class="optsection">HLS</div>';
+    hlsI.audioTracks.forEach((track, i) => {
+      const label = track.name || track.lang || `Piste audio ${i + 1}`;
+      const detail = [track.lang, track.groupId].filter(Boolean).join(' · ');
+      html += optionButton(label, hlsI.audioTrack === i, `setHlsAudioTrack(${i})`, detail);
+    });
+  }
+
+  if (dashI && typeof dashI.getTracksFor === 'function'){
+    try{
+      const tracks = dashI.getTracksFor('audio') || [];
+      const current = dashI.getCurrentTrackFor ? dashI.getCurrentTrackFor('audio') : null;
+      if (tracks.length){
+        found = true;
+        html += '<div class="optsection">MPEG-DASH</div>';
+        tracks.forEach((track, i) => {
+          const label = track.lang || track.id || `Piste audio ${i + 1}`;
+          const detail = [track.codec, track.roles && track.roles.join ? track.roles.join(', ') : ''].filter(Boolean).join(' · ');
+          const active = current && ((current.id && current.id === track.id) || current.index === track.index);
+          html += optionButton(label, !!active, `setDashAudioTrack(${i})`, detail);
+        });
+      }
+    } catch(e){}
+  }
+
+  const nativeAudio = getNativeAudioTracks();
+  if (nativeAudio.length){
+    found = true;
+    html += '<div class="optsection">Navigateur</div>';
+    nativeAudio.forEach((track, i) => {
+      const label = track.label || track.language || `Piste audio ${i + 1}`;
+      html += optionButton(label, !!track.enabled, `setNativeAudioTrack(${i})`, track.language || '');
+    });
+  }
+
+  if (!found){
+    html = `<div class="optempty">Aucune piste audio multiple détectée.<br>Le navigateur expose parfois seulement la piste par défaut.</div>
+      ${optionButton('Piste audio par défaut', true, "closeOptionModal('audioTrackModal')", 'active')}`;
+  }
+
+  body.innerHTML = html;
+  modal.classList.add('on');
+  osd('🎧 Pistes audio');
+}
+
+function setHlsAudioTrack(i){
+  if (hlsI) hlsI.audioTrack = i;
+  showAudioTrackManager();
+  osd('🎧 Piste audio ' + (i + 1));
+}
+
+function setDashAudioTrack(i){
+  try{
+    const tracks = dashI.getTracksFor('audio') || [];
+    if (tracks[i]) dashI.setCurrentTrack(tracks[i]);
+  } catch(e){}
+  showAudioTrackManager();
+  osd('🎧 Piste audio ' + (i + 1));
+}
+
+function setNativeAudioTrack(i){
+  const tracks = getNativeAudioTracks();
+  tracks.forEach((track, idx) => track.enabled = idx === i);
+  showAudioTrackManager();
+  osd('🎧 Piste audio ' + (i + 1));
+}
+
+function showSubtitleManager(){
+  const modal = ensureOptionModal('subtitleModal', 'Sous-titres');
+  const body = modal.querySelector('.optionBody');
+  let html = '';
+  let found = false;
+
+  html += optionButton('Désactivés', !customSubEnabled && getActiveExternalSubtitleIndex() < 0, 'disableAllSubtitles()', 'masquer tous les sous-titres');
+
+  if (subCues.length){
+    found = true;
+    html += '<div class="optsection">Fichier chargé</div>';
+    html += optionButton(loadedSubName || 'Sous-titres externes', customSubEnabled, 'enableCustomSubtitles()', `${subCues.length} ligne(s)`);
+  }
+
+  if (hlsI && hlsI.subtitleTracks && hlsI.subtitleTracks.length){
+    found = true;
+    html += '<div class="optsection">HLS</div>';
+    hlsI.subtitleTracks.forEach((track, i) => {
+      const label = track.name || track.lang || `Sous-titres ${i + 1}`;
+      const detail = [track.lang, track.type].filter(Boolean).join(' · ');
+      html += optionButton(label, hlsI.subtitleTrack === i, `setHlsSubtitleTrack(${i})`, detail);
+    });
+  }
+
+  const nativeText = getNativeTextTracks();
+  if (nativeText.length){
+    found = true;
+    html += '<div class="optsection">Navigateur</div>';
+    nativeText.forEach((track, i) => {
+      const label = track.label || track.language || `Sous-titres ${i + 1}`;
+      html += optionButton(label, track.mode === 'showing', `setNativeSubtitleTrack(${i})`, track.language || track.kind || '');
+    });
+  }
+
+  if (!found){
+    html += '<div class="optempty">Aucun sous-titre chargé ou détecté.</div>';
+  }
+
+  html += `<div class="optfooterline">
+    <button class="mbtn" onclick="document.getElementById('subInput').click();closeOptionModal('subtitleModal')">Charger un fichier</button>
+    <button class="mbtn" onclick="clearSubtitles();showSubtitleManager()">Effacer</button>
+  </div>`;
+
+  body.innerHTML = html;
+  modal.classList.add('on');
+  osd('💬 Sous-titres');
+}
+
+function getActiveExternalSubtitleIndex(){
+  if (hlsI && typeof hlsI.subtitleTrack === 'number' && hlsI.subtitleTrack >= 0) return hlsI.subtitleTrack;
+  return -1;
+}
+
+function disableAllSubtitles(){
+  customSubEnabled = false;
+  document.getElementById('subs').innerHTML = '';
+  if (hlsI && typeof hlsI.subtitleTrack !== 'undefined') hlsI.subtitleTrack = -1;
+  getNativeTextTracks().forEach(track => track.mode = 'disabled');
+  showSubtitleManager();
+  osd('💬 Sous-titres désactivés');
+}
+
+function enableCustomSubtitles(){
+  customSubEnabled = true;
+  if (hlsI && typeof hlsI.subtitleTrack !== 'undefined') hlsI.subtitleTrack = -1;
+  getNativeTextTracks().forEach(track => track.mode = 'disabled');
+  showSubtitleManager();
+  osd('💬 Sous-titres externes');
+}
+
+function toggleSubtitles(){
+  customSubEnabled = !customSubEnabled;
+  if (!customSubEnabled) document.getElementById('subs').innerHTML = '';
+  osd(customSubEnabled ? '💬 Sous-titres activés' : '💬 Sous-titres désactivés');
+}
+
+function clearSubtitles(){
+  subCues = [];
+  loadedSubName = '';
+  customSubEnabled = false;
+  document.getElementById('subs').innerHTML = '';
+  if (subLoop){ clearInterval(subLoop); subLoop = null; }
+  osd('💬 Sous-titres effacés');
+}
+
+function setHlsSubtitleTrack(i){
+  customSubEnabled = false;
+  document.getElementById('subs').innerHTML = '';
+  if (hlsI) hlsI.subtitleTrack = i;
+  getNativeTextTracks().forEach(track => track.mode = 'disabled');
+  showSubtitleManager();
+  osd('💬 Sous-titres HLS ' + (i + 1));
+}
+
+function setNativeSubtitleTrack(i){
+  customSubEnabled = false;
+  document.getElementById('subs').innerHTML = '';
+  getNativeTextTracks().forEach((track, idx) => track.mode = idx === i ? 'showing' : 'disabled');
+  if (hlsI && typeof hlsI.subtitleTrack !== 'undefined') hlsI.subtitleTrack = -1;
+  showSubtitleManager();
+  osd('💬 Sous-titres ' + (i + 1));
+}
+
+function showQualityManager(){
+  const modal = ensureOptionModal('qualityModal', 'Qualité audio / vidéo');
+  const body = modal.querySelector('.optionBody');
+  let html = '';
+  let found = false;
+
+  html += optionButton('Meilleure qualité disponible', qualityMode === 'best', 'setBestQuality()', 'force le niveau le plus élevé quand possible');
+  html += optionButton('Automatique adaptatif', qualityMode === 'auto', 'setAutoQuality()', 'laisse le flux s’adapter à la connexion');
+
+  if (hlsI && hlsI.levels && hlsI.levels.length){
+    found = true;
+    html += '<div class="optsection">HLS — niveaux vidéo</div>';
+    hlsI.levels.forEach((level, i) => {
+      const res = level.width && level.height ? `${level.width}×${level.height}` : (level.height ? `${level.height}p` : 'Résolution inconnue');
+      const br = level.bitrate ? `${Math.round(level.bitrate / 1000)} kbps` : '';
+      const codecs = [level.videoCodec, level.audioCodec].filter(Boolean).join(' / ');
+      const active = qualityMode === 'manual' && hlsI.currentLevel === i;
+      html += optionButton(`${i + 1}. ${res}`, active, `setHlsQuality(${i})`, [br, codecs].filter(Boolean).join(' · '));
+    });
+  }
+
+  if (dashI && typeof dashI.getBitrateInfoListFor === 'function'){
+    try{
+      const videos = dashI.getBitrateInfoListFor('video') || [];
+      const audios = dashI.getBitrateInfoListFor('audio') || [];
+      if (videos.length){
+        found = true;
+        const current = dashI.getQualityFor ? dashI.getQualityFor('video') : -1;
+        html += '<div class="optsection">DASH — qualité vidéo</div>';
+        videos.forEach((q, i) => {
+          const res = q.width && q.height ? `${q.width}×${q.height}` : `Vidéo ${i + 1}`;
+          const br = q.bitrate ? `${Math.round(q.bitrate / 1000)} kbps` : '';
+          html += optionButton(`${i + 1}. ${res}`, qualityMode === 'manual' && current === i, `setDashVideoQuality(${i})`, [br, q.codec].filter(Boolean).join(' · '));
+        });
+      }
+      if (audios.length){
+        found = true;
+        const currentA = dashI.getQualityFor ? dashI.getQualityFor('audio') : -1;
+        html += '<div class="optsection">DASH — qualité audio</div>';
+        audios.forEach((q, i) => {
+          const br = q.bitrate ? `${Math.round(q.bitrate / 1000)} kbps` : `Audio ${i + 1}`;
+          html += optionButton(`${i + 1}. ${br}`, qualityMode === 'manual' && currentA === i, `setDashAudioQuality(${i})`, q.codec || '');
+        });
+      }
+    } catch(e){}
+  }
+
+  if (!found){
+    html += '<div class="optempty">Ce média ne propose pas de choix de qualité exposé au navigateur. La qualité utilisée est celle du fichier ou du flux source.</div>';
+  }
+
+  body.innerHTML = html;
+  modal.classList.add('on');
+  osd('📶 Qualité');
+}
+
+function setBestQuality(){
+  qualityMode = 'best';
+  if (hlsI) chooseBestHlsLevel();
+  if (dashI) chooseBestDashQuality();
+  showQualityManager();
+  osd('📶 Meilleure qualité');
+}
+
+function setAutoQuality(){
+  qualityMode = 'auto';
+  if (hlsI){
+    hlsI.currentLevel = -1;
+    hlsI.loadLevel = -1;
+    hlsI.nextLevel = -1;
+    hlsI.autoLevelCapping = -1;
+  }
+  if (dashI){
+    try{ dashI.updateSettings({ streaming:{ abr:{ autoSwitchBitrate:{ video:true, audio:true } } } }); }catch(e){}
+  }
+  showQualityManager();
+  osd('📶 Qualité automatique');
+}
+
+function setHlsQuality(i){
+  qualityMode = 'manual';
+  if (hlsI){
+    hlsI.currentLevel = i;
+    hlsI.loadLevel = i;
+    hlsI.nextLevel = i;
+  }
+  showQualityManager();
+  osd('📶 HLS niveau ' + (i + 1));
+}
+
+function setDashVideoQuality(i){
+  qualityMode = 'manual';
+  try{
+    dashI.updateSettings({ streaming:{ abr:{ autoSwitchBitrate:{ video:false } } } });
+    dashI.setQualityFor('video', i, true);
+  } catch(e){}
+  showQualityManager();
+  osd('📶 DASH vidéo ' + (i + 1));
+}
+
+function setDashAudioQuality(i){
+  qualityMode = 'manual';
+  try{
+    dashI.updateSettings({ streaming:{ abr:{ autoSwitchBitrate:{ audio:false } } } });
+    dashI.setQualityFor('audio', i, true);
+  } catch(e){}
+  showQualityManager();
+  osd('📶 DASH audio ' + (i + 1));
 }
 
 function chooseBestHlsLevel(){
@@ -855,6 +1195,8 @@ function stopViz(){
 async function loadSub(file){
   const txt = await file.text(), e = xext(file.name);
   subCues = [];
+  loadedSubName = file.name;
+  customSubEnabled = true;
 
   if (e === 'vtt') parseVTT(txt);
   else if (e === 'srt') parseSRT(txt);
@@ -864,6 +1206,10 @@ async function loadSub(file){
 
   if (subLoop) clearInterval(subLoop);
   subLoop = setInterval(() => {
+    if (!customSubEnabled){
+      document.getElementById('subs').innerHTML = '';
+      return;
+    }
     const t = vid.currentTime;
     const c = subCues.find(q => t >= q.s && t <= q.e);
     document.getElementById('subs').innerHTML = c ? c.t.replace(/\n/g, '<br>') : '';
@@ -1417,6 +1763,18 @@ document.addEventListener('keydown', e => {
     case 'V':
       togglePlaylistView();
       break;
+    case 'a':
+    case 'A':
+      showAudioTrackManager();
+      break;
+    case 'u':
+    case 'U':
+      showSubtitleManager();
+      break;
+    case 'q':
+    case 'Q':
+      showQualityManager();
+      break;
     case 'ArrowUp':
       e.preventDefault();
       chVol(5);
@@ -1468,5 +1826,17 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey && (e.key === 'i' || e.key === 'I')){
     e.preventDefault();
     showMediaInfo();
+  }
+  if (e.ctrlKey && (e.key === 'a' || e.key === 'A')){
+    e.preventDefault();
+    showAudioTrackManager();
+  }
+  if (e.ctrlKey && (e.key === 'u' || e.key === 'U')){
+    e.preventDefault();
+    showSubtitleManager();
+  }
+  if (e.ctrlKey && (e.key === 'q' || e.key === 'Q')){
+    e.preventDefault();
+    showQualityManager();
   }
 });

@@ -8,7 +8,7 @@
   <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/flv.js@latest/dist/flv.min.js"></script>
 
-  <link rel="stylesheet" href="styles.css?v=6">
+  <link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
 
@@ -64,9 +64,22 @@
   <div class="mi" id="mA">
     <div class="ml" onclick="tmenu('mA')">Audio</div>
     <div class="dd">
+      <div class="di" onclick="cm();showAudioTrackManager()">Piste audio… <span class="sc">A</span></div>
+      <div class="di" onclick="cm();showQualityManager()">Qualité audio / vidéo… <span class="sc">Q</span></div>
+      <div class="ds"></div>
       <div class="di" onclick="cm();tMute()">Muet <span class="sc">M</span></div>
       <div class="di" onclick="cm();chVol(10)">Volume +10%</div>
       <div class="di" onclick="cm();chVol(-10)">Volume -10%</div>
+    </div>
+  </div>
+
+  <div class="mi" id="mS">
+    <div class="ml" onclick="tmenu('mS')">Sous-titres</div>
+    <div class="dd">
+      <div class="di" onclick="cm();document.getElementById('subInput').click()">Charger un fichier… <span class="sc">Ctrl+S</span></div>
+      <div class="di" onclick="cm();showSubtitleManager()">Gestion des sous-titres… <span class="sc">U</span></div>
+      <div class="di" onclick="cm();toggleSubtitles()">Activer / désactiver</div>
+      <div class="di" onclick="cm();clearSubtitles()">Effacer les sous-titres</div>
     </div>
   </div>
 
@@ -74,6 +87,7 @@
     <div class="ml" onclick="tmenu('mV')">Vidéo</div>
     <div class="dd">
       <div class="di" onclick="cm();tFull()">Plein écran <span class="sc">F</span></div>
+      <div class="di" onclick="cm();showQualityManager()">Qualité… <span class="sc">Q</span></div>
       <div class="ds"></div>
       <div class="di" onclick="cm();setAsp('contain')">Adapter</div>
       <div class="di" onclick="cm();setAsp('cover')">Remplir</div>
@@ -122,6 +136,15 @@
   </div>
   <div class="tb" title="Playlist grand écran" onclick="togglePlaylistView()">
     <svg viewBox="0 0 24 24"><path d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h18v2H3v-2z"/></svg>
+  </div>
+  <div class="tb" title="Piste audio" onclick="showAudioTrackManager()">
+    <svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
+  </div>
+  <div class="tb" title="Sous-titres" onclick="showSubtitleManager()">
+    <svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-2 10H6v-2h12v2zm-4-4H6V8h8v2z"/></svg>
+  </div>
+  <div class="tb" title="Qualité" onclick="showQualityManager()">
+    <svg viewBox="0 0 24 24"><path d="M3 17h2v4H3v-4zm4-4h2v8H7v-8zm4-4h2v12h-2V9zm4-4h2v16h-2V5zm4-2h2v18h-2V3z"/></svg>
   </div>
 </div>
 
@@ -252,6 +275,6 @@
   </div>
 </div>
 
-<script src="script.js?v=6"></script>
+<script src="script.js?v=7"></script>
 </body>
 </html>
