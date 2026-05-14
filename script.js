@@ -632,6 +632,10 @@ function detect(url){
   const cleanUrl = raw.split('?')[0].split('#')[0].toLowerCase();
   const e = xext(cleanUrl);
 
+  // Playlist réseau : https://iptv-org.github.io/iptv/index.m3u
+  if (e === 'm3u' || e === 'pls') return 'playlist';
+
+  // .m3u8 est souvent un flux HLS. On le garde en HLS.
   if (e === 'm3u8' || cleanUrl.includes('.m3u8') || cleanUrl.includes('/hls/')) return 'hls';
   if (e === 'mpd'  || cleanUrl.includes('.mpd')  || cleanUrl.includes('/dash/')) return 'dash';
   if (e === 'flv') return 'flv';
@@ -653,6 +657,10 @@ function detect(url){
   }
 
   return 'direct';
+}
+
+function isPlaylistUrl(url){
+  return detect(url) === 'playlist';
 }
 // ── MENU ──
 function tmenu(id){
@@ -984,12 +992,18 @@ function playLocalPlaylistItem(ch){
   osd('▶ ' + ch.name);
 }
 // ── PLAY URL ──
-function playUrl(){
+async function playUrl(){
   const url = document.getElementById('turl').value.trim();
   if (!url) return;
   chIdx = -1;
   splash.style.display = 'none';
   hideAudio();
+
+  if (isPlaylistUrl(url)){
+    await loadNetworkPlaylist(url);
+    return;
+  }
+
   playUrlStr(url, url);
   osd('▶ ' + url);
 }
@@ -1281,23 +1295,108 @@ function assT(t){
   return +h * 3600 + +m * 60 + parseFloat(s);
 }
 
+// ── NETWORK PLAYLISTS ──
+function resolvePlaylistUrl(line, baseUrl){
+  const value = String(line || '').trim();
+  if (!value) return '';
+
+  try{
+    if (baseUrl) return new URL(value, baseUrl).href;
+  } catch(e){}
+
+  return value;
+}
+
+function getM3UNameFromExtinf(line){
+  const comma = line.lastIndexOf(',');
+  if (comma >= 0 && comma + 1 < line.length){
+    return line.slice(comma + 1).trim() || 'Flux inconnu';
+  }
+  return 'Flux inconnu';
+}
+
+function looksLikePlayableUrl(line){
+  return /^(https?|rtmp|rtsp|\/)/i.test(line) || !line.startsWith('#');
+}
+
+async function loadNetworkPlaylist(url){
+  const before = channels.length;
+
+  try{
+    stL.innerText = 'Chargement playlist réseau…';
+    osd('📡 Chargement playlist…');
+
+    const res = await fetch(url, { cache:'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+
+    const txt = await res.text();
+    const lower = url.split('?')[0].toLowerCase();
+
+    if (lower.endsWith('.pls') || /^\s*\[playlist\]/i.test(txt)){
+      parsePLS(txt, { baseUrl:url });
+    } else {
+      parseM3U(txt, { baseUrl:url });
+    }
+
+    const added = channels.length - before;
+
+    if (added <= 0){
+      osd('❌ Aucune chaîne trouvée');
+      stL.innerText = 'Playlist réseau vide ou non reconnue';
+      return;
+    }
+
+    filtered = [...channels];
+    renderCh();
+    updatePlaylistFooter('chaîne');
+    stL.innerText = `Playlist réseau — ${added} ajouté(s), ${channels.length} total`;
+    osd(`📋 ${added} chaîne(s) ajoutée(s)`);
+  } catch(e){
+    osd('❌ Playlist impossible à charger');
+    stL.innerText = 'Erreur playlist réseau : ' + e.message;
+    alert(
+      'Impossible de charger cette playlist.\n\n' +
+      url + '\n\n' +
+      'Détail : ' + e.message + '\n\n' +
+      'Sur GitHub Pages, certains sites peuvent bloquer le chargement par CORS. ' +
+      'Le lien IPTV-org devrait fonctionner parce qu’il est publié sur GitHub.'
+    );
+  }
+}
+
 // ── PARSERS ──
-function parseM3U(data){
-  const lines = data.split('\n');
+function parseM3U(data, options = {}){
+  const lines = String(data || '').split('\n');
   let cur = {};
+  let added = 0;
 
   lines.forEach(line => {
     line = line.trim();
+    if (!line) return;
+
     if (line.startsWith('#EXTINF:')){
-      const name  = (line.split(',')[1] || 'Flux inconnu').trim();
-      const logo  = (line.match(/tvg-logo="([^"]+)"/) || [])[1] || '';
-      const group = (line.match(/group-title="([^"]+)"/) || [])[1] || '';
-      cur = { name, logo, group };
-    } else if (line.match(/^(https?|rtmp|rtsp|\/)/)){
-      if (cur.name){
-        channels.push({ ...cur, url:line });
-        cur = {};
-      }
+      const name  = getM3UNameFromExtinf(line);
+      const logo  = (line.match(/tvg-logo="([^"]+)"/i) || [])[1] || '';
+      const group = (line.match(/group-title="([^"]+)"/i) || [])[1] || '';
+      const tvgId = (line.match(/tvg-id="([^"]+)"/i) || [])[1] || '';
+      const tvgName = (line.match(/tvg-name="([^"]+)"/i) || [])[1] || '';
+      const lang = (line.match(/tvg-language="([^"]+)"/i) || [])[1] || '';
+      cur = { name, logo, group, tvgId, tvgName, lang };
+      return;
+    }
+
+    if (line.startsWith('#')) return;
+
+    if (cur.name && looksLikePlayableUrl(line)){
+      const resolvedUrl = resolvePlaylistUrl(line, options.baseUrl);
+      channels.push({
+        ...cur,
+        url: resolvedUrl,
+        sourcePlaylist: options.baseUrl || '',
+        ext: xext(resolvedUrl)
+      });
+      cur = {};
+      added++;
     }
   });
 
@@ -1309,18 +1408,32 @@ function parseM3U(data){
   });
 
   updatePlaylistFooter('chaîne');
-  osd(`📋 ${channels.length} chaîne(s) chargée(s)`);
+  osd(`📋 ${added || channels.length} chaîne(s) chargée(s)`);
 }
 
-function parsePLS(txt){
+function parsePLS(txt, options = {}){
   let title = '';
+  let added = 0;
 
-  txt.split('\n').forEach(l => {
+  String(txt || '').split('\n').forEach(l => {
+    l = l.trim();
     const mt = l.match(/^Title\d+=(.+)/i);
     if (mt) title = mt[1].trim();
 
     const mf = l.match(/^File\d+=(.+)/i);
-    if (mf) channels.push({ name:title || 'Piste', url:mf[1].trim(), logo:'', group:'' });
+    if (mf){
+      const url = resolvePlaylistUrl(mf[1].trim(), options.baseUrl);
+      channels.push({
+        name:title || 'Piste',
+        url,
+        logo:'',
+        group:'',
+        sourcePlaylist: options.baseUrl || '',
+        ext:xext(url),
+        logoOk:false
+      });
+      added++;
+    }
   });
 
   filtered = [...channels];
@@ -1331,7 +1444,7 @@ function parsePLS(txt){
   });
 
   updatePlaylistFooter('piste');
-  osd(`📋 ${channels.length} piste(s)`);
+  osd(`📋 ${added || channels.length} piste(s)`);
 }
 // ── LOGOS CACHE ──
 const DEFAULT_LOGO = 'https://upload.wikimedia.org/wikipedia/commons/e/e8/VLC_Icon.svg';
@@ -1377,16 +1490,34 @@ function testLogoOnce(url){
   });
 }
 
-async function prepareLogos(){
-  for (const ch of channels){
-    if (!ch.logo){
-      ch.logoOk = false;
-      continue;
-    }
+async function prepareLogos(list = channels){
+  const items = list.filter(ch => ch.logo && ch.logoOk === undefined);
 
-    ch.logoOk = await testLogoOnce(ch.logo);
+  list.forEach(ch => {
+    if (!ch.logo) ch.logoOk = false;
+  });
+
+  if (!items.length) return;
+
+  const concurrency = 16;
+  let cursor = 0;
+  let done = 0;
+
+  async function worker(){
+    while (cursor < items.length){
+      const ch = items[cursor++];
+      ch.logoOk = await testLogoOnce(ch.logo);
+      done++;
+
+      // Pour les très grosses listes comme IPTV-org, on rafraîchit par petits blocs.
+      if (done % 80 === 0) renderCh();
+    }
   }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  renderCh();
 }
+
 
 function renderCh(){
   plist.innerHTML = '';
@@ -1702,7 +1833,7 @@ function openUrlModal(){
 function closeUrlModal(){
   document.getElementById('urlModal').classList.remove('on');
 }
-function fromModal(){
+async function fromModal(){
   const url = document.getElementById('urlInp').value.trim();
   if (!url) return;
   closeUrlModal();
@@ -1710,6 +1841,12 @@ function fromModal(){
   chIdx = -1;
   splash.style.display = 'none';
   hideAudio();
+
+  if (isPlaylistUrl(url)){
+    await loadNetworkPlaylist(url);
+    return;
+  }
+
   playUrlStr(url, url);
   osd('▶ ' + url);
 }
