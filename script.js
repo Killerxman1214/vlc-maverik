@@ -148,6 +148,7 @@ function mediaRows(){
   const ext = currentMedia.ext || xext(currentMedia.url || currentMedia.name || '');
   const adaptive = type === 'hls' ? getHlsCodecInfo() : (type === 'dash' ? getDashCodecInfo() : null);
   const videoSize = vid.videoWidth && vid.videoHeight ? `${vid.videoWidth}×${vid.videoHeight}` : '—';
+  const clickedUrl = currentMedia.url || '—';
   const currentSrc = vid.currentSrc || vid.src || currentMedia.url || '—';
   const isAudio = type === 'audio' || AUDIO.has(ext);
   const duration = fmt(vid.duration);
@@ -156,6 +157,7 @@ function mediaRows(){
     ['Source', currentMedia.local ? 'Fichier local' : (currentMedia.source || 'Flux / URL')],
     ['Type détecté', type || 'direct'],
     ['Extension', ext || '—'],
+    ['Emplacement / URL média', clickedUrl],
     ['URL / chemin', currentSrc],
     ['Groupe', currentMedia.group || '—'],
     ['Taille fichier', fmtBytes(currentMedia.fileSize)],
