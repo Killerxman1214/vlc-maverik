@@ -21,6 +21,20 @@ let seekActive = false;
 let subCues = [], subLoop = null;
 let objUrl = null;
 let vizAF = null, audioCtx = null, srcNode = null, analyser = null, gainNode = null;
+let eqFilters = [], eqEnabled = true, currentEqPreset = 'Flat';
+const EQ_BANDS = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000];
+const EQ_PRESETS = {
+  'Flat':      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  'Bass Boost':[8, 7, 5, 3, 1, 0, 0, 0, 0, 0],
+  'Treble Boost':[0, 0, 0, 0, 1, 3, 5, 7, 8, 8],
+  'Rock':     [5, 4, 3, 1, -1, 1, 3, 5, 6, 6],
+  'Pop':      [-1, 2, 4, 5, 3, 0, -1, -1, 2, 3],
+  'Dance':    [6, 5, 2, 0, 0, -2, -3, -3, 0, 1],
+  'Classique':[0, 0, 0, 0, 0, 2, 4, 4, 3, 2],
+  'Voix':     [-4, -3, -2, 1, 4, 5, 4, 2, 0, -1],
+  'Podcast':  [-6, -4, -2, 2, 5, 5, 3, 0, -2, -4],
+  'Nuit':     [-5, -4, -3, -2, -1, -1, -2, -3, -4, -5]
+};
 let currentMedia = { name:'—', url:'', type:'', source:'', group:'', ext:'', local:false, file:null, startedAt:null };
 let networkMediaUrls = [];
 let selectedChannels = new Set();
@@ -152,145 +166,48 @@ function getDashCodecInfo(){
   } catch(e){ return null; }
 }
 
-function getDistinctNetworkUrls(){
-  const seen = new Set();
-  const result = [];
-
-  networkMediaUrls.forEach(url => {
-    const value = String(url || '').trim();
-    if (!value || seen.has(value)) return;
-    seen.add(value);
-    result.push(value);
-  });
-
-  return result;
-}
-
-function isSameUrl(a, b){
-  if (!a || !b) return false;
-  try{
-    return new URL(a, window.location.href).href === new URL(b, window.location.href).href;
-  } catch(e){
-    return String(a).trim() === String(b).trim();
-  }
-}
-
-function pickBestNetworkUrl(originalUrl, currentSrc, urls){
-  const list = (urls || []).filter(Boolean);
-
-  // Priorité aux vraies URLs de fragments HLS/DASH, comme dans DevTools Network.
-  for (let i = list.length - 1; i >= 0; i--){
-    const u = list[i];
-    const clean = u.split('?')[0].split('#')[0].toLowerCase();
-
-    if (
-      clean.endsWith('.ts') ||
-      clean.endsWith('.m4s') ||
-      clean.endsWith('.mp4') ||
-      clean.endsWith('.aac') ||
-      clean.endsWith('.mp3') ||
-      clean.endsWith('.m3u8') ||
-      clean.endsWith('.mpd')
-    ){
-      return u;
-    }
-  }
-
-  // Sinon, dernière URL connue qui n'est pas un doublon de l'URL originale.
-  for (let i = list.length - 1; i >= 0; i--){
-    const u = list[i];
-    if (!isSameUrl(u, originalUrl) && !isSameUrl(u, currentSrc)) return u;
-  }
-
-  return currentSrc || originalUrl || '';
-}
-
-function friendlyMediaType(type, ext){
-  if (type === 'hls') return 'Flux HLS adaptatif';
-  if (type === 'dash') return 'Flux MPEG-DASH adaptatif';
-  if (type === 'audio') return 'Flux audio';
-  if (type === 'direct') return 'Média direct';
-  if (type === 'playlist') return 'Playlist';
-  if (type === 'flv') return 'Flux FLV';
-  if (type === 'yt') return 'YouTube';
-  if (type === 'dm') return 'Dailymotion';
-  return type || (ext ? `.${ext}` : 'direct');
-}
-
-function addRow(rows, label, value, options = {}){
-  if (value === undefined || value === null || value === '') return;
-  if (value === '—' && options.hideEmpty) return;
-  rows.push([label, value]);
-}
-
-function addSection(rows, title){
-  rows.push({ section:title });
-}
-
 function mediaRows(){
+  
   const type = currentMedia.type || detect(currentMedia.url || '');
   const ext = currentMedia.ext || xext(currentMedia.url || currentMedia.name || '');
   const adaptive = type === 'hls' ? getHlsCodecInfo() : (type === 'dash' ? getDashCodecInfo() : null);
   const videoSize = vid.videoWidth && vid.videoHeight ? `${vid.videoWidth}×${vid.videoHeight}` : '—';
+  const clickedUrl = currentMedia.url || '—';
+  const networkUrl = networkMediaUrls.length
+    ? networkMediaUrls[networkMediaUrls.length - 1]
+    : (vid.currentSrc || vid.src || currentMedia.url || '—');
   const isAudio = type === 'audio' || AUDIO.has(ext);
   const duration = fmt(vid.duration);
-  const originalUrl = currentMedia.url || '';
-  const currentSrc = vid.currentSrc || vid.src || '';
-  const networkUrls = getDistinctNetworkUrls();
-  const bestNetworkUrl = pickBestNetworkUrl(originalUrl, currentSrc, networkUrls);
-  const recentNetworkUrls = networkUrls
-    .filter(url => !isSameUrl(url, originalUrl) && !isSameUrl(url, bestNetworkUrl))
-    .slice(-6)
-    .reverse();
-
-  const rows = [];
-
-  addSection(rows, 'Général');
-  addRow(rows, 'Titre', currentMedia.name || '—');
-  addRow(rows, 'Source', currentMedia.local ? 'Fichier local' : (currentMedia.source || 'Flux / URL'));
-  addRow(rows, 'Type', friendlyMediaType(type, ext));
-  addRow(rows, 'Extension', ext ? `.${ext}` : '—');
-  addRow(rows, 'Groupe', currentMedia.group || '—', { hideEmpty:true });
-
-  addSection(rows, 'Emplacement');
-  addRow(rows, 'Emplacement', originalUrl || currentSrc || '—');
-
-  if (bestNetworkUrl && !isSameUrl(bestNetworkUrl, originalUrl)){
-    addRow(rows, 'Dernière URL réseau utile', bestNetworkUrl);
-  }
-
-  if (recentNetworkUrls.length){
-    addRow(rows, 'Autres URLs réseau récentes', recentNetworkUrls.join('\n'));
-  }
-
-  addSection(rows, 'Lecture');
-  addRow(rows, 'État', vid.paused ? 'Pause / arrêté' : 'Lecture');
-  addRow(rows, 'Durée', duration);
-  addRow(rows, 'Position', fmt(vid.currentTime));
-  addRow(rows, 'Volume', `${Math.round((vid.volume || 0) * 100)}%${vid.muted ? ' (muet)' : ''}`);
-  addRow(rows, 'Vitesse', `×${vid.playbackRate || 1}`);
-  addRow(rows, 'Qualité', qualityMode === 'best' ? 'Meilleure qualité disponible' : (qualityMode === 'auto' ? 'Automatique adaptatif' : 'Manuelle'));
-
-  addSection(rows, 'Codecs / flux');
-  addRow(rows, 'Codec probable', guessCodecFromExt(ext, type));
-  addRow(rows, 'Mode audio', isAudio ? 'Oui — visualiseur audio activé' : 'Non / vidéo');
-  addRow(rows, 'Résolution vidéo', videoSize);
-
+  const rows = [
+    ['Titre', currentMedia.name],
+    ['Source', currentMedia.local ? 'Fichier local' : (currentMedia.source || 'Flux / URL')],
+    ['Type détecté', type || 'direct'],
+    ['Extension', ext || '—'],
+    ['Emplacement / URL média', clickedUrl],
+    ['URL Network actuelle', networkUrl],
+    ['URL média originale', currentMedia.url || '—'],
+    ['Groupe', currentMedia.group || '—'],
+    ['Taille fichier', fmtBytes(currentMedia.fileSize)],
+    ['Modifié le', fmtDate(currentMedia.lastModified)],
+    ['Durée', duration],
+    ['Position', fmt(vid.currentTime)],
+    ['Résolution vidéo', videoSize],
+    ['Codec probable', guessCodecFromExt(ext, type)],
+    ['Mode audio', isAudio ? 'Oui — visualiseur audio activé' : 'Non / vidéo'],
+    ['Volume', `${Math.round((vid.volume || 0) * 100)}%${vid.muted ? ' (muet)' : ''}`],
+    ['Vitesse', `×${vid.playbackRate || 1}`],
+    ['État lecteur', vid.paused ? 'Pause / arrêté' : 'Lecture'],
+    ['Qualité', qualityMode === 'best' ? 'Meilleure qualité disponible' : (qualityMode === 'auto' ? 'Automatique adaptatif' : 'Manuelle')],
+    ['Égaliseur', eqEnabled ? currentEqPreset : 'Désactivé']
+  ];
   if (adaptive){
-    addRow(rows, 'Protocole adaptatif', adaptive.protocole);
-    addRow(rows, 'Niveau courant', adaptive.niveau);
-    addRow(rows, 'Résolution flux', adaptive.resolution);
-    addRow(rows, 'Débit flux', adaptive.bitrate);
-    addRow(rows, 'Codec vidéo flux', adaptive.videoCodec);
-    addRow(rows, 'Codec audio flux', adaptive.audioCodec);
+    rows.push(['Protocole adaptatif', adaptive.protocole]);
+    rows.push(['Niveau courant', adaptive.niveau]);
+    rows.push(['Résolution flux', adaptive.resolution]);
+    rows.push(['Débit flux', adaptive.bitrate]);
+    rows.push(['Codec vidéo flux', adaptive.videoCodec]);
+    rows.push(['Codec audio flux', adaptive.audioCodec]);
   }
-
-  if (currentMedia.local){
-    addSection(rows, 'Fichier');
-    addRow(rows, 'Taille fichier', fmtBytes(currentMedia.fileSize));
-    addRow(rows, 'Modifié le', fmtDate(currentMedia.lastModified));
-  }
-
   return rows;
 }
 
@@ -318,46 +235,7 @@ function ensureMediaInfoModal(){
 }
 
 function mediaInfoText(){
-  const lines = [];
-
-  mediaRows().forEach(row => {
-    if (row.section){
-      lines.push('');
-      lines.push('[' + row.section + ']');
-      return;
-    }
-
-    const k = row[0];
-    const v = String(row[1] ?? '').trim();
-    lines.push(`${k}: ${v}`);
-  });
-
-  return lines.join('\n').trim();
-}
-
-function looksLikeMediaNetworkUrl(url){
-  const value = String(url || '').trim();
-  if (!value || !/^https?:|^blob:/i.test(value)) return false;
-
-  const clean = value.split('?')[0].split('#')[0].toLowerCase();
-  const mediaExts = [
-    '.m3u8','.mpd','.ts','.m4s','.mp4','.mkv','.webm','.mov','.flv',
-    '.mp3','.aac','.m4a','.ogg','.opus','.wav','.flac'
-  ];
-
-  if (mediaExts.some(ext => clean.endsWith(ext))) return true;
-  if (currentMedia.url && value.includes(currentMedia.url)) return true;
-  if (vid.currentSrc && value.includes(vid.currentSrc)) return true;
-
-  return (
-    clean.includes('/hls/') ||
-    clean.includes('/dash/') ||
-    clean.includes('/live/') ||
-    clean.includes('/stream') ||
-    clean.includes('livestream') ||
-    clean.includes('chunk') ||
-    clean.includes('segment')
-  );
+  return mediaRows().map(([k,v]) => `${k}: ${String(v).replace(/\s+/g,' ').trim()}`).join('\n');
 }
 
 function rememberNetworkUrl(url){
@@ -366,65 +244,21 @@ function rememberNetworkUrl(url){
   const value = String(url).trim();
   if (!value) return;
 
-  // Évite les doublons consécutifs tout en gardant l'ordre.
-  if (networkMediaUrls[networkMediaUrls.length - 1] === value) return;
-
-  const oldIndex = networkMediaUrls.indexOf(value);
-  if (oldIndex >= 0) networkMediaUrls.splice(oldIndex, 1);
-
-  networkMediaUrls.push(value);
-
-  // Garde seulement les 30 dernières URLs utiles.
-  if (networkMediaUrls.length > 30){
-    networkMediaUrls = networkMediaUrls.slice(-30);
-  }
-}
-
-let mediaNetworkObserverStarted = false;
-
-function initMediaNetworkTracking(){
-  if (mediaNetworkObserverStarted) return;
-  mediaNetworkObserverStarted = true;
-
-  vid.addEventListener('loadstart', () => rememberNetworkUrl(vid.currentSrc || vid.src));
-  vid.addEventListener('loadedmetadata', () => rememberNetworkUrl(vid.currentSrc || vid.src));
-
-  if ('PerformanceObserver' in window){
-    try{
-      const observer = new PerformanceObserver(list => {
-        list.getEntries().forEach(entry => {
-          if (entry && entry.name && looksLikeMediaNetworkUrl(entry.name)){
-            rememberNetworkUrl(entry.name);
-          }
-        });
-      });
-
-      observer.observe({ type:'resource', buffered:true });
-    } catch(e){}
-  }
-}
-
-initMediaNetworkTracking();
-
-function renderMediaInfoRow(row){
-  if (row.section){
-    return `<tr class="media-info-section">
-      <th colspan="2" style="background:rgba(255,136,0,.16);color:#fff;text-transform:uppercase;letter-spacing:.04em;padding:7px 8px">${escHtml(row.section)}</th>
-    </tr>`;
+  // Évite les doublons
+  if (!networkMediaUrls.includes(value)){
+    networkMediaUrls.push(value);
   }
 
-  const label = escHtml(row[0]);
-  const value = escHtml(row[1]).replace(/\n/g, '<br>');
-  return `<tr>
-    <th>${label}</th>
-    <td style="white-space:pre-wrap;word-break:break-all">${value}</td>
-  </tr>`;
+  // Garde seulement les 20 dernières URLs Network
+  if (networkMediaUrls.length > 20){
+    networkMediaUrls = networkMediaUrls.slice(-20);
+  }
 }
 
 function showMediaInfo(){
   const modal = ensureMediaInfoModal();
   const body = modal.querySelector('#mediaInfoBody');
-  body.innerHTML = `<table class="media-info-table"><tbody>${mediaRows().map(renderMediaInfoRow).join('')}</tbody></table>`;
+  body.innerHTML = `<table class="media-info-table"><tbody>${mediaRows().map(([k,v]) => `<tr><th>${escHtml(k)}</th><td>${escHtml(v)}</td></tr>`).join('')}</tbody></table>`;
   modal.classList.add('on');
   osd('ℹ️ Informations média');
 }
@@ -1895,6 +1729,49 @@ vid.onended = () => { if (rep) vid.play(); else nextCh(); };
 function setRate(r){ vid.playbackRate = r; osd('⚡ ×' + r); }
 
 // ── CONFIGURATION WEB AUDIO POUR BOOST ──
+function ensureEqualizerFilters(){
+  if (!audioCtx) return [];
+
+  if (eqFilters.length === EQ_BANDS.length) return eqFilters;
+
+  eqFilters = EQ_BANDS.map(freq => {
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'peaking';
+    filter.frequency.value = freq;
+    filter.Q.value = 1.1;
+    filter.gain.value = 0;
+    return filter;
+  });
+
+  applyEqPreset(currentEqPreset, false);
+  return eqFilters;
+}
+
+function disconnectEqFilters(){
+  eqFilters.forEach(filter => {
+    try{ filter.disconnect(); }catch(e){}
+  });
+}
+
+function connectEqualizerChain(inputNode, outputNode){
+  if (!eqEnabled){
+    inputNode.connect(outputNode);
+    return;
+  }
+
+  const filters = ensureEqualizerFilters();
+  if (!filters.length){
+    inputNode.connect(outputNode);
+    return;
+  }
+
+  inputNode.connect(filters[0]);
+  for (let i = 0; i < filters.length - 1; i++){
+    filters[i].connect(filters[i + 1]);
+  }
+  filters[filters.length - 1].connect(outputNode);
+}
+
 function ensureAudioGraph(){
   try{
     if (!audioCtx){
@@ -1915,14 +1792,15 @@ function ensureAudioGraph(){
       analyser.smoothingTimeConstant = 0.82;
     }
 
-    // Chaîne unique : video -> gain boost -> analyseur -> haut-parleurs.
+    // Chaîne unique : video -> gain boost -> égaliseur -> analyseur -> haut-parleurs.
     // Ça évite l'erreur createMediaElementSource utilisé plusieurs fois.
     try{ srcNode.disconnect(); }catch(e){}
     try{ gainNode.disconnect(); }catch(e){}
+    disconnectEqFilters();
     try{ analyser.disconnect(); }catch(e){}
 
     srcNode.connect(gainNode);
-    gainNode.connect(analyser);
+    connectEqualizerChain(gainNode, analyser);
     analyser.connect(audioCtx.destination);
 
     if (audioCtx.state === 'suspended'){
@@ -1932,6 +1810,130 @@ function ensureAudioGraph(){
     console.warn('Erreur audio graph:', e);
   }
 }
+
+function eqFreqLabel(freq){
+  return freq >= 1000 ? (freq / 1000).toFixed(freq >= 10000 ? 0 : 1).replace('.0','') + ' kHz' : freq + ' Hz';
+}
+
+function eqValues(){
+  const preset = EQ_PRESETS[currentEqPreset] || EQ_PRESETS.Flat;
+  return EQ_BANDS.map((_, i) => eqFilters[i] ? Math.round(eqFilters[i].gain.value * 10) / 10 : preset[i]);
+}
+
+function setEqBandGain(index, value){
+  ensureAudioGraph();
+  const v = Math.max(-12, Math.min(12, parseFloat(value) || 0));
+  currentEqPreset = 'Personnalisé';
+  if (eqFilters[index]) eqFilters[index].gain.value = v;
+
+  const label = document.getElementById('eqVal' + index);
+  if (label) label.innerText = (v > 0 ? '+' : '') + v + ' dB';
+
+  const presetSel = document.getElementById('eqPresetSelect');
+  if (presetSel) presetSel.value = 'Personnalisé';
+}
+
+function applyEqPreset(name, refresh = true){
+  const values = EQ_PRESETS[name] || EQ_PRESETS.Flat;
+  currentEqPreset = name;
+
+  if (audioCtx) ensureEqualizerFilters();
+  eqFilters.forEach((filter, i) => {
+    filter.gain.value = values[i] || 0;
+  });
+
+  if (refresh) showEqualizerManager();
+  osd('🎚 Égaliseur — ' + name);
+}
+
+function setEqualizerEnabled(enabled){
+  eqEnabled = !!enabled;
+  ensureAudioGraph();
+  showEqualizerManager();
+  osd(eqEnabled ? '🎚 Égaliseur activé' : '🎚 Égaliseur désactivé');
+}
+
+function resetEqualizer(){
+  applyEqPreset('Flat', true);
+}
+
+function ensureEqualizerModal(){
+  let modal = document.getElementById('equalizerModal');
+  if (modal) return modal;
+
+  modal = document.createElement('div');
+  modal.className = 'moverlay';
+  modal.id = 'equalizerModal';
+  modal.innerHTML = `
+    <div class="modal option-modal" style="min-width:620px;max-width:860px;width:72vw">
+      <div class="mtitle">Égaliseur audio <span class="x" onclick="closeOptionModal('equalizerModal')">✖</span></div>
+      <div class="mbody"><div class="optionBody"></div></div>
+      <div class="mfoot">
+        <button class="mbtn" onclick="resetEqualizer()">Réinitialiser</button>
+        <button class="mbtn p" onclick="closeOptionModal('equalizerModal')">Fermer</button>
+      </div>
+    </div>`;
+  modal.addEventListener('click', e => { if (e.target.id === 'equalizerModal') closeOptionModal('equalizerModal'); });
+  document.body.appendChild(modal);
+  return modal;
+}
+
+function showEqualizerManager(){
+  ensureAudioGraph();
+
+  const modal = ensureEqualizerModal();
+  const body = modal.querySelector('.optionBody');
+  const values = eqValues();
+  const presetNames = Object.keys(EQ_PRESETS);
+  const presetOptions = ['Personnalisé', ...presetNames]
+    .map(name => `<option value="${escHtml(name)}" ${name === currentEqPreset ? 'selected' : ''}>${escHtml(name)}</option>`)
+    .join('');
+
+  body.innerHTML = `
+    <div class="optsection">Présets</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+      <button class="mbtn ${eqEnabled ? 'p' : ''}" onclick="setEqualizerEnabled(${!eqEnabled})">${eqEnabled ? 'Activé' : 'Désactivé'}</button>
+      <select id="eqPresetSelect" onchange="if(this.value !== 'Personnalisé') applyEqPreset(this.value)" style="flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:6px 8px;outline:none">
+        ${presetOptions}
+      </select>
+    </div>
+
+    <div class="optsection">Bandes</div>
+    <div style="display:grid;grid-template-columns:repeat(10,1fr);gap:10px;align-items:end;min-height:250px">
+      ${EQ_BANDS.map((freq, i) => `
+        <div style="display:flex;flex-direction:column;align-items:center;gap:7px;min-width:42px">
+          <div id="eqVal${i}" style="font-size:10px;color:var(--text2);height:14px">${values[i] > 0 ? '+' : ''}${values[i]} dB</div>
+          <input type="range" min="-12" max="12" step="1" value="${values[i]}" oninput="setEqBandGain(${i}, this.value)" style="writing-mode:bt-lr;-webkit-appearance:slider-vertical;width:28px;height:150px;accent-color:var(--orange)">
+          <div style="font-size:10px;color:var(--text);text-align:center;white-space:nowrap">${eqFreqLabel(freq)}</div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="hint">L’égaliseur utilise Web Audio et reste compatible avec ton boost de volume. La chaîne audio est : lecteur → volume/boost → égaliseur → visualiseur → sortie.</div>
+  `;
+
+  modal.classList.add('on');
+  osd('🎚 Égaliseur');
+}
+
+function addEqualizerMenuEntry(){
+  const audioMenu = document.querySelector('#mA .dd');
+  if (!audioMenu || document.getElementById('eqMenuItem')) return;
+
+  const item = document.createElement('div');
+  item.className = 'di';
+  item.id = 'eqMenuItem';
+  item.onclick = () => { cm(); showEqualizerManager(); };
+  item.innerHTML = 'Égaliseur… <span class="sc">E</span>';
+
+  const sep = document.createElement('div');
+  sep.className = 'ds';
+  sep.id = 'eqMenuSep';
+
+  audioMenu.insertBefore(sep, audioMenu.firstChild);
+  audioMenu.insertBefore(item, audioMenu.firstChild);
+}
+
+setTimeout(addEqualizerMenuEntry, 0);
 
 function applyVolumeBoost(v){
   ensureAudioGraph();
@@ -2226,6 +2228,10 @@ document.addEventListener('keydown', e => {
     case 'U':
       showSubtitleManager();
       break;
+    case 'e':
+    case 'E':
+      showEqualizerManager();
+      break;
     case 'q':
     case 'Q':
       showQualityManager();
@@ -2289,6 +2295,10 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey && (e.key === 'u' || e.key === 'U')){
     e.preventDefault();
     showSubtitleManager();
+  }
+  if (e.ctrlKey && (e.key === 'e' || e.key === 'E')){
+    e.preventDefault();
+    showEqualizerManager();
   }
   if (e.ctrlKey && (e.key === 'q' || e.key === 'Q')){
     e.preventDefault();
