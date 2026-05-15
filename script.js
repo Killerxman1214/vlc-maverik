@@ -660,7 +660,27 @@ function detect(url){
 }
 
 function isPlaylistUrl(url){
-  return detect(url) === 'playlist';
+  const raw = String(url || '').trim();
+  const clean = raw.toLowerCase();
+
+  // Garde l'ancien comportement : .m3u / .pls
+  if (detect(raw) === 'playlist') return true;
+
+  // Support Xtream Codes / IPTV : get.php?...&type=m3u_plus
+  // Exemple : http://serveur:8080/get.php?username=...&password=...&type=m3u_plus
+  try{
+    const u = new URL(raw, window.location.href);
+    const path = u.pathname.toLowerCase();
+    const type = (u.searchParams.get('type') || '').toLowerCase();
+    const output = (u.searchParams.get('output') || '').toLowerCase();
+
+    if (path.endsWith('/get.php') || path.endsWith('get.php')){
+      if (type.includes('m3u') || output.includes('m3u')) return true;
+    }
+  } catch(e){}
+
+  // Fallback pour URL bizarre/non parsable
+  return clean.includes('/get.php') && (clean.includes('type=m3u') || clean.includes('output=m3u'));
 }
 // ── MENU ──
 function tmenu(id){
