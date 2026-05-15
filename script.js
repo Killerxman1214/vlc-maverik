@@ -20,7 +20,7 @@ let osdT = null, vosdT = null;
 let seekActive = false;
 let subCues = [], subLoop = null;
 let objUrl = null;
-let vizAF = null, audioCtx = null, srcNode = null, analyser = null;
+let vizAF = null, audioCtx = null, srcNode = null, analyser = null, gainNode = null;
 let currentMedia = { name:'—', url:'', type:'', source:'', group:'', ext:'', local:false, file:null, startedAt:null };
 let selectedChannels = new Set();
 let qualityMode = 'best'; // best | auto | manual
@@ -1156,7 +1156,6 @@ function showAudio(name){
   document.getElementById('audioMode').classList.add('on');
   document.getElementById('audioTitle').innerText = name;
   startViz();
-  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
 }
 function hideAudio(){
   document.getElementById('audioMode').classList.remove('on');
@@ -1164,15 +1163,8 @@ function hideAudio(){
 }
 function startViz(){
   try{
-    if (!audioCtx){
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.82;
-      srcNode = audioCtx.createMediaElementSource(vid);
-      srcNode.connect(analyser);
-      analyser.connect(audioCtx.destination);
-    }
+    ensureAudioGraph();
+    if (!analyser) return;
 
     const cv = document.getElementById('vizCanvas');
     const cx = cv.getContext('2d');
@@ -1196,7 +1188,9 @@ function startViz(){
     }
 
     draw();
-  } catch(e){}
+  } catch(e){
+    console.warn('Erreur visualiseur audio:', e);
+  }
 }
 function stopViz(){
   if (vizAF){
@@ -1651,62 +1645,98 @@ vid.onended = () => { if (rep) vid.play(); else nextCh(); };
 function setRate(r){ vid.playbackRate = r; osd('⚡ ×' + r); }
 
 // ── CONFIGURATION WEB AUDIO POUR BOOST ──
-let audioCtx, source, gainNode;
+function ensureAudioGraph(){
+  try{
+    if (!audioCtx){
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
 
-function initAudioAmplifier() {
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    source = audioCtx.createMediaElementSource(vid);
-    gainNode = audioCtx.createGain();
-    source.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
+    if (!srcNode){
+      srcNode = audioCtx.createMediaElementSource(vid);
+    }
+
+    if (!gainNode){
+      gainNode = audioCtx.createGain();
+    }
+
+    if (!analyser){
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.82;
+    }
+
+    // Chaîne unique : video -> gain boost -> analyseur -> haut-parleurs.
+    // Ça évite l'erreur createMediaElementSource utilisé plusieurs fois.
+    try{ srcNode.disconnect(); }catch(e){}
+    try{ gainNode.disconnect(); }catch(e){}
+    try{ analyser.disconnect(); }catch(e){}
+
+    srcNode.connect(gainNode);
+    gainNode.connect(analyser);
+    analyser.connect(audioCtx.destination);
+
+    if (audioCtx.state === 'suspended'){
+      audioCtx.resume().catch(() => {});
+    }
+  } catch(e){
+    console.warn('Erreur audio graph:', e);
+  }
+}
+
+function applyVolumeBoost(v){
+  ensureAudioGraph();
+
+  if (!gainNode) return;
+
+  if (muted || v <= 0){
+    vid.volume = 0;
+    gainNode.gain.value = 0;
+    return;
+  }
+
+  if (v <= 100){
+    vid.volume = v / 100;
+    gainNode.gain.value = 1;
+  } else {
+    vid.volume = 1;
+    gainNode.gain.value = v / 100;
   }
 }
 
 // ── VOLUME ──
 function setVol(v){
   v = parseFloat(v);
-  
-  // Initialise l'amplificateur Web Audio au premier changement
-  initAudioAmplifier();
-  
-  if (v <= 100) {
-    // Comportement standard de 0% à 100%
-    vid.volume = v / 100;
-    if (gainNode) gainNode.gain.value = 1.0;
-  } else {
-    // Boost logiciel de 101% à 250%
-    vid.volume = 1.0;
-    if (gainNode) gainNode.gain.value = v / 100;
+  if (isNaN(v)) v = 100;
+  v = Math.max(0, Math.min(250, v));
+
+  if (v > 0 && muted){
+    muted = false;
+    vid.muted = false;
   }
-  
+
+  applyVolumeBoost(v);
+
   document.getElementById('volPct').innerText = Math.round(v) + '%';
   document.getElementById('volSl').value = v;
-  
+
   updVol(v);
   vosd(Math.round(v));
-  
-  if (v > 0 && muted){
-    tMute(); // Désactive le mode muet si on augmente le volume
-  }
 }
 
 function chVol(d){
-  // Limite supérieure élevée de 150 à 250
-  setVol(Math.min(250, Math.max(0, parseInt(document.getElementById('volSl').value) + d)));
+  const current = parseFloat(document.getElementById('volSl').value) || 100;
+  setVol(current + d);
 }
 
 function tMute(){
   muted = !muted;
   vid.muted = muted;
-  
-  // Coupe aussi le gain de l'amplificateur pour garantir le silence total
-  if (gainNode) {
-    gainNode.gain.value = muted ? 0 : (parseFloat(document.getElementById('volSl').value) > 100 ? parseFloat(document.getElementById('volSl').value) / 100 : 1.0);
-  }
-  
+
+  const v = parseFloat(document.getElementById('volSl').value) || 100;
+  applyVolumeBoost(muted ? 0 : v);
+
   osd(muted ? '🔇 Muet' : '🔊 Son');
-  updVol(muted ? 0 : parseInt(document.getElementById('volSl').value));
+  updVol(muted ? 0 : v);
 }
 
 function updVol(v){
