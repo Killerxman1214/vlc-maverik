@@ -21,19 +21,20 @@ let seekActive = false;
 let subCues = [], subLoop = null;
 let objUrl = null;
 let vizAF = null, audioCtx = null, srcNode = null, analyser = null, gainNode = null;
-let eqFilters = [], eqEnabled = true, currentEqPreset = 'Flat';
+// Égaliseur désactivé par défaut: le son reste naturel tant que l'utilisateur ne l'active pas.
+let eqFilters = [], eqEnabled = false, currentEqPreset = 'Flat';
 const EQ_BANDS = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000];
 const EQ_PRESETS = {
-  'Flat':      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-  'Bass Boost':[8, 7, 5, 3, 1, 0, 0, 0, 0, 0],
+  'Flat':        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  'Bass Boost':  [8, 7, 5, 3, 1, 0, 0, 0, 0, 0],
   'Treble Boost':[0, 0, 0, 0, 1, 3, 5, 7, 8, 8],
-  'Rock':     [5, 4, 3, 1, -1, 1, 3, 5, 6, 6],
-  'Pop':      [-1, 2, 4, 5, 3, 0, -1, -1, 2, 3],
-  'Dance':    [6, 5, 2, 0, 0, -2, -3, -3, 0, 1],
-  'Classique':[0, 0, 0, 0, 0, 2, 4, 4, 3, 2],
-  'Voix':     [-4, -3, -2, 1, 4, 5, 4, 2, 0, -1],
-  'Podcast':  [-6, -4, -2, 2, 5, 5, 3, 0, -2, -4],
-  'Nuit':     [-5, -4, -3, -2, -1, -1, -2, -3, -4, -5]
+  'Rock':        [5, 4, 3, 1, -1, 1, 3, 5, 6, 6],
+  'Pop':         [-1, 2, 4, 5, 3, 0, -1, -1, 2, 3],
+  'Dance':       [6, 5, 2, 0, 0, -2, -3, -3, 0, 1],
+  'Classique':   [0, 0, 0, 0, 0, 2, 4, 4, 3, 2],
+  'Voix':        [-4, -3, -2, 1, 4, 5, 4, 2, 0, -1],
+  'Podcast':     [-6, -4, -2, 2, 5, 5, 3, 0, -2, -4],
+  'Nuit':        [-5, -4, -3, -2, -1, -1, -2, -3, -4, -5]
 };
 let currentMedia = { name:'—', url:'', type:'', source:'', group:'', ext:'', local:false, file:null, startedAt:null };
 let networkMediaUrls = [];
@@ -166,48 +167,146 @@ function getDashCodecInfo(){
   } catch(e){ return null; }
 }
 
+function getDistinctNetworkUrls(){
+  const seen = new Set();
+  const result = [];
+
+  networkMediaUrls.forEach(url => {
+    const value = String(url || '').trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    result.push(value);
+  });
+
+  return result;
+}
+
+function isSameUrl(a, b){
+  if (!a || !b) return false;
+  try{
+    return new URL(a, window.location.href).href === new URL(b, window.location.href).href;
+  } catch(e){
+    return String(a).trim() === String(b).trim();
+  }
+}
+
+function pickBestNetworkUrl(originalUrl, currentSrc, urls){
+  const list = (urls || []).filter(Boolean);
+
+  // Priorité aux vraies URLs de fragments HLS/DASH, comme dans DevTools Network.
+  for (let i = list.length - 1; i >= 0; i--){
+    const u = list[i];
+    const clean = u.split('?')[0].split('#')[0].toLowerCase();
+
+    if (
+      clean.endsWith('.ts') ||
+      clean.endsWith('.m4s') ||
+      clean.endsWith('.mp4') ||
+      clean.endsWith('.aac') ||
+      clean.endsWith('.mp3') ||
+      clean.endsWith('.m3u8') ||
+      clean.endsWith('.mpd')
+    ){
+      return u;
+    }
+  }
+
+  // Sinon, dernière URL connue qui n'est pas un doublon de l'URL originale.
+  for (let i = list.length - 1; i >= 0; i--){
+    const u = list[i];
+    if (!isSameUrl(u, originalUrl) && !isSameUrl(u, currentSrc)) return u;
+  }
+
+  return currentSrc || originalUrl || '';
+}
+
+function friendlyMediaType(type, ext){
+  if (type === 'hls') return 'Flux HLS adaptatif';
+  if (type === 'dash') return 'Flux MPEG-DASH adaptatif';
+  if (type === 'audio') return 'Flux audio';
+  if (type === 'direct') return 'Média direct';
+  if (type === 'playlist') return 'Playlist';
+  if (type === 'flv') return 'Flux FLV';
+  if (type === 'yt') return 'YouTube';
+  if (type === 'dm') return 'Dailymotion';
+  return type || (ext ? `.${ext}` : 'direct');
+}
+
+function addRow(rows, label, value, options = {}){
+  if (value === undefined || value === null || value === '') return;
+  if (value === '—' && options.hideEmpty) return;
+  rows.push([label, value]);
+}
+
+function addSection(rows, title){
+  rows.push({ section:title });
+}
+
 function mediaRows(){
-  
   const type = currentMedia.type || detect(currentMedia.url || '');
   const ext = currentMedia.ext || xext(currentMedia.url || currentMedia.name || '');
   const adaptive = type === 'hls' ? getHlsCodecInfo() : (type === 'dash' ? getDashCodecInfo() : null);
   const videoSize = vid.videoWidth && vid.videoHeight ? `${vid.videoWidth}×${vid.videoHeight}` : '—';
-  const clickedUrl = currentMedia.url || '—';
-  const networkUrl = networkMediaUrls.length
-    ? networkMediaUrls[networkMediaUrls.length - 1]
-    : (vid.currentSrc || vid.src || currentMedia.url || '—');
   const isAudio = type === 'audio' || AUDIO.has(ext);
   const duration = fmt(vid.duration);
-  const rows = [
-    ['Titre', currentMedia.name],
-    ['Source', currentMedia.local ? 'Fichier local' : (currentMedia.source || 'Flux / URL')],
-    ['Type détecté', type || 'direct'],
-    ['Extension', ext || '—'],
-    ['Emplacement / URL média', clickedUrl],
-    ['URL Network actuelle', networkUrl],
-    ['URL média originale', currentMedia.url || '—'],
-    ['Groupe', currentMedia.group || '—'],
-    ['Taille fichier', fmtBytes(currentMedia.fileSize)],
-    ['Modifié le', fmtDate(currentMedia.lastModified)],
-    ['Durée', duration],
-    ['Position', fmt(vid.currentTime)],
-    ['Résolution vidéo', videoSize],
-    ['Codec probable', guessCodecFromExt(ext, type)],
-    ['Mode audio', isAudio ? 'Oui — visualiseur audio activé' : 'Non / vidéo'],
-    ['Volume', `${Math.round((vid.volume || 0) * 100)}%${vid.muted ? ' (muet)' : ''}`],
-    ['Vitesse', `×${vid.playbackRate || 1}`],
-    ['État lecteur', vid.paused ? 'Pause / arrêté' : 'Lecture'],
-    ['Qualité', qualityMode === 'best' ? 'Meilleure qualité disponible' : (qualityMode === 'auto' ? 'Automatique adaptatif' : 'Manuelle')],
-    ['Égaliseur', eqEnabled ? currentEqPreset : 'Désactivé']
-  ];
-  if (adaptive){
-    rows.push(['Protocole adaptatif', adaptive.protocole]);
-    rows.push(['Niveau courant', adaptive.niveau]);
-    rows.push(['Résolution flux', adaptive.resolution]);
-    rows.push(['Débit flux', adaptive.bitrate]);
-    rows.push(['Codec vidéo flux', adaptive.videoCodec]);
-    rows.push(['Codec audio flux', adaptive.audioCodec]);
+  const originalUrl = currentMedia.url || '';
+  const currentSrc = vid.currentSrc || vid.src || '';
+  const networkUrls = getDistinctNetworkUrls();
+  const bestNetworkUrl = pickBestNetworkUrl(originalUrl, currentSrc, networkUrls);
+  const recentNetworkUrls = networkUrls
+    .filter(url => !isSameUrl(url, originalUrl) && !isSameUrl(url, bestNetworkUrl))
+    .slice(-6)
+    .reverse();
+
+  const rows = [];
+
+  addSection(rows, 'Général');
+  addRow(rows, 'Titre', currentMedia.name || '—');
+  addRow(rows, 'Source', currentMedia.local ? 'Fichier local' : (currentMedia.source || 'Flux / URL'));
+  addRow(rows, 'Type', friendlyMediaType(type, ext));
+  addRow(rows, 'Extension', ext ? `.${ext}` : '—');
+  addRow(rows, 'Groupe', currentMedia.group || '—', { hideEmpty:true });
+
+  addSection(rows, 'Emplacement');
+  addRow(rows, 'Emplacement', originalUrl || currentSrc || '—');
+
+  if (bestNetworkUrl && !isSameUrl(bestNetworkUrl, originalUrl)){
+    addRow(rows, 'Dernière URL réseau utile', bestNetworkUrl);
   }
+
+  if (recentNetworkUrls.length){
+    addRow(rows, 'Autres URLs réseau récentes', recentNetworkUrls.join('\n'));
+  }
+
+  addSection(rows, 'Lecture');
+  addRow(rows, 'État', vid.paused ? 'Pause / arrêté' : 'Lecture');
+  addRow(rows, 'Durée', duration);
+  addRow(rows, 'Position', fmt(vid.currentTime));
+  addRow(rows, 'Volume', `${Math.round((vid.volume || 0) * 100)}%${vid.muted ? ' (muet)' : ''}`);
+  addRow(rows, 'Vitesse', `×${vid.playbackRate || 1}`);
+  addRow(rows, 'Qualité', qualityMode === 'best' ? 'Meilleure qualité disponible' : (qualityMode === 'auto' ? 'Automatique adaptatif' : 'Manuelle'));
+  addRow(rows, 'Égaliseur', eqEnabled ? currentEqPreset : 'Désactivé');
+
+  addSection(rows, 'Codecs / flux');
+  addRow(rows, 'Codec probable', guessCodecFromExt(ext, type));
+  addRow(rows, 'Mode audio', isAudio ? 'Oui — visualiseur audio activé' : 'Non / vidéo');
+  addRow(rows, 'Résolution vidéo', videoSize);
+
+  if (adaptive){
+    addRow(rows, 'Protocole adaptatif', adaptive.protocole);
+    addRow(rows, 'Niveau courant', adaptive.niveau);
+    addRow(rows, 'Résolution flux', adaptive.resolution);
+    addRow(rows, 'Débit flux', adaptive.bitrate);
+    addRow(rows, 'Codec vidéo flux', adaptive.videoCodec);
+    addRow(rows, 'Codec audio flux', adaptive.audioCodec);
+  }
+
+  if (currentMedia.local){
+    addSection(rows, 'Fichier');
+    addRow(rows, 'Taille fichier', fmtBytes(currentMedia.fileSize));
+    addRow(rows, 'Modifié le', fmtDate(currentMedia.lastModified));
+  }
+
   return rows;
 }
 
@@ -235,7 +334,46 @@ function ensureMediaInfoModal(){
 }
 
 function mediaInfoText(){
-  return mediaRows().map(([k,v]) => `${k}: ${String(v).replace(/\s+/g,' ').trim()}`).join('\n');
+  const lines = [];
+
+  mediaRows().forEach(row => {
+    if (row.section){
+      lines.push('');
+      lines.push('[' + row.section + ']');
+      return;
+    }
+
+    const k = row[0];
+    const v = String(row[1] ?? '').trim();
+    lines.push(`${k}: ${v}`);
+  });
+
+  return lines.join('\n').trim();
+}
+
+function looksLikeMediaNetworkUrl(url){
+  const value = String(url || '').trim();
+  if (!value || !/^https?:|^blob:/i.test(value)) return false;
+
+  const clean = value.split('?')[0].split('#')[0].toLowerCase();
+  const mediaExts = [
+    '.m3u8','.mpd','.ts','.m4s','.mp4','.mkv','.webm','.mov','.flv',
+    '.mp3','.aac','.m4a','.ogg','.opus','.wav','.flac'
+  ];
+
+  if (mediaExts.some(ext => clean.endsWith(ext))) return true;
+  if (currentMedia.url && value.includes(currentMedia.url)) return true;
+  if (vid.currentSrc && value.includes(vid.currentSrc)) return true;
+
+  return (
+    clean.includes('/hls/') ||
+    clean.includes('/dash/') ||
+    clean.includes('/live/') ||
+    clean.includes('/stream') ||
+    clean.includes('livestream') ||
+    clean.includes('chunk') ||
+    clean.includes('segment')
+  );
 }
 
 function rememberNetworkUrl(url){
@@ -244,21 +382,65 @@ function rememberNetworkUrl(url){
   const value = String(url).trim();
   if (!value) return;
 
-  // Évite les doublons
-  if (!networkMediaUrls.includes(value)){
-    networkMediaUrls.push(value);
+  // Évite les doublons consécutifs tout en gardant l'ordre.
+  if (networkMediaUrls[networkMediaUrls.length - 1] === value) return;
+
+  const oldIndex = networkMediaUrls.indexOf(value);
+  if (oldIndex >= 0) networkMediaUrls.splice(oldIndex, 1);
+
+  networkMediaUrls.push(value);
+
+  // Garde seulement les 30 dernières URLs utiles.
+  if (networkMediaUrls.length > 30){
+    networkMediaUrls = networkMediaUrls.slice(-30);
+  }
+}
+
+let mediaNetworkObserverStarted = false;
+
+function initMediaNetworkTracking(){
+  if (mediaNetworkObserverStarted) return;
+  mediaNetworkObserverStarted = true;
+
+  vid.addEventListener('loadstart', () => rememberNetworkUrl(vid.currentSrc || vid.src));
+  vid.addEventListener('loadedmetadata', () => rememberNetworkUrl(vid.currentSrc || vid.src));
+
+  if ('PerformanceObserver' in window){
+    try{
+      const observer = new PerformanceObserver(list => {
+        list.getEntries().forEach(entry => {
+          if (entry && entry.name && looksLikeMediaNetworkUrl(entry.name)){
+            rememberNetworkUrl(entry.name);
+          }
+        });
+      });
+
+      observer.observe({ type:'resource', buffered:true });
+    } catch(e){}
+  }
+}
+
+initMediaNetworkTracking();
+
+function renderMediaInfoRow(row){
+  if (row.section){
+    return `<tr class="media-info-section">
+      <th colspan="2" style="background:rgba(255,136,0,.16);color:#fff;text-transform:uppercase;letter-spacing:.04em;padding:7px 8px">${escHtml(row.section)}</th>
+    </tr>`;
   }
 
-  // Garde seulement les 20 dernières URLs Network
-  if (networkMediaUrls.length > 20){
-    networkMediaUrls = networkMediaUrls.slice(-20);
-  }
+  const label = escHtml(row[0]);
+  const value = escHtml(row[1]).replace(/\n/g, '<br>');
+  return `<tr>
+    <th>${label}</th>
+    <td style="white-space:pre-wrap;word-break:break-all">${value}</td>
+  </tr>`;
 }
 
 function showMediaInfo(){
   const modal = ensureMediaInfoModal();
   const body = modal.querySelector('#mediaInfoBody');
-  body.innerHTML = `<table class="media-info-table"><tbody>${mediaRows().map(([k,v]) => `<tr><th>${escHtml(k)}</th><td>${escHtml(v)}</td></tr>`).join('')}</tbody></table>`;
+  body.innerHTML = `<table class="media-info-table"><tbody>${mediaRows().map(renderMediaInfoRow).join('')}</tbody></table>`;
   modal.classList.add('on');
   osd('ℹ️ Informations média');
 }
@@ -1728,7 +1910,7 @@ function nextCh(){
 vid.onended = () => { if (rep) vid.play(); else nextCh(); };
 function setRate(r){ vid.playbackRate = r; osd('⚡ ×' + r); }
 
-// ── CONFIGURATION WEB AUDIO POUR BOOST ──
+// ── CONFIGURATION WEB AUDIO POUR BOOST + ÉGALISEUR ──
 function ensureEqualizerFilters(){
   if (!audioCtx) return [];
 
@@ -1754,6 +1936,7 @@ function disconnectEqFilters(){
 }
 
 function connectEqualizerChain(inputNode, outputNode){
+  // Désactivé par défaut: aucun filtre ne modifie le son.
   if (!eqEnabled){
     inputNode.connect(outputNode);
     return;
@@ -1792,8 +1975,8 @@ function ensureAudioGraph(){
       analyser.smoothingTimeConstant = 0.82;
     }
 
-    // Chaîne unique : video -> gain boost -> égaliseur -> analyseur -> haut-parleurs.
-    // Ça évite l'erreur createMediaElementSource utilisé plusieurs fois.
+    // Chaîne unique : lecteur -> volume/boost -> égaliseur optionnel -> visualiseur -> sortie.
+    // Si l'égaliseur est désactivé, le signal passe directement du gain à l'analyseur.
     try{ srcNode.disconnect(); }catch(e){}
     try{ gainNode.disconnect(); }catch(e){}
     disconnectEqFilters();
@@ -1908,7 +2091,7 @@ function showEqualizerManager(){
         </div>
       `).join('')}
     </div>
-    <div class="hint">L’égaliseur utilise Web Audio et reste compatible avec ton boost de volume. La chaîne audio est : lecteur → volume/boost → égaliseur → visualiseur → sortie.</div>
+    <div class="hint">Par défaut, l’égaliseur est désactivé et ne modifie pas le son. Active-le avec le bouton Désactivé/Activé. La chaîne audio reste compatible avec ton boost de volume.</div>
   `;
 
   modal.classList.add('on');
