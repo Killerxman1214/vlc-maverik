@@ -1650,31 +1650,69 @@ function nextCh(){
 vid.onended = () => { if (rep) vid.play(); else nextCh(); };
 function setRate(r){ vid.playbackRate = r; osd('⚡ ×' + r); }
 
+// ── CONFIGURATION WEB AUDIO POUR BOOST ──
+let audioCtx, source, gainNode;
+
+function initAudioAmplifier() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    source = audioCtx.createMediaElementSource(vid);
+    gainNode = audioCtx.createGain();
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+  }
+}
+
 // ── VOLUME ──
 function setVol(v){
   v = parseFloat(v);
-  vid.volume = Math.min(v / 100, 1);
+  
+  // Initialise l'amplificateur Web Audio au premier changement
+  initAudioAmplifier();
+  
+  if (v <= 100) {
+    // Comportement standard de 0% à 100%
+    vid.volume = v / 100;
+    if (gainNode) gainNode.gain.value = 1.0;
+  } else {
+    // Boost logiciel de 101% à 250%
+    vid.volume = 1.0;
+    if (gainNode) gainNode.gain.value = v / 100;
+  }
+  
   document.getElementById('volPct').innerText = Math.round(v) + '%';
   document.getElementById('volSl').value = v;
+  
   updVol(v);
   vosd(Math.round(v));
-  if (v > 0){
-    vid.muted = false;
-    muted = false;
+  
+  if (v > 0 && muted){
+    tMute(); // Désactive le mode muet si on augmente le volume
   }
 }
+
 function chVol(d){
-  setVol(Math.min(150, Math.max(0, parseInt(document.getElementById('volSl').value) + d)));
+  // Limite supérieure élevée de 150 à 250
+  setVol(Math.min(250, Math.max(0, parseInt(document.getElementById('volSl').value) + d)));
 }
+
 function tMute(){
   muted = !muted;
   vid.muted = muted;
+  
+  // Coupe aussi le gain de l'amplificateur pour garantir le silence total
+  if (gainNode) {
+    gainNode.gain.value = muted ? 0 : (parseFloat(document.getElementById('volSl').value) > 100 ? parseFloat(document.getElementById('volSl').value) / 100 : 1.0);
+  }
+  
   osd(muted ? '🔇 Muet' : '🔊 Son');
   updVol(muted ? 0 : parseInt(document.getElementById('volSl').value));
 }
+
 function updVol(v){
-  document.getElementById('vw1').style.display = v == 0 || muted ? 'none' : '';
-  document.getElementById('vw2').style.display = v < 50 || muted ? 'none' : '';
+  const isMuted = v == 0 || muted;
+  document.getElementById('vw1').style.display = isMuted ? 'none' : '';
+  document.getElementById('vw2').style.display = isMuted || v < 50 ? 'none' : '';
 }
 
 // ── PANEL / FULL ──
